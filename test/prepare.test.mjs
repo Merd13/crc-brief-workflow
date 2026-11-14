@@ -35,7 +35,7 @@ const pull = {
   body: "Fixes double charges.",
   user: { login: "octocat" },
   base: { ref: "main", sha: "1b2c3d4e5f60718293a4b5c6d7e8f90123456789" },
-  head: { ref: "retry-key", sha: "8f21c9a4d3e7b0615c2a9f8e7d6b5a4938271605" },
+  head: { ref: "retry-key", sha: "8f21c9a4d3e7b0615c2a9f8e7d6b5a4938271605", repo: { full_name: "acme/payments" } },
 };
 
 function fakeGitHub(routes) {
@@ -99,6 +99,29 @@ test("a pull request without a description has an empty body", async () => {
   assert.equal((await prepare({ repo: "acme/payments", number: 248, fetch, token: "t" })).body, "");
 });
 
+test("a pull request from a fork is refused", async () => {
+  const { fetch } = fakeGitHub({
+    "/repos/acme/payments/pulls/248": { ...pull, head: { ...pull.head, repo: { full_name: "mallory/payments" } } },
+  });
+  await assert.rejects(
+    prepare({ repo: "acme/payments", number: 248, fetch, token: "t" }),
+    /Pull request #248 comes from a fork \(mallory\/payments\)\. Briefs are written only for branches of acme\/payments\./,
+  );
+});
+
+test("a pull request whose head repository was deleted is refused", async () => {
+  const { fetch } = fakeGitHub({ "/repos/acme/payments/pulls/248": { ...pull, head: { ...pull.head, repo: null } } });
+  await assert.rejects(prepare({ repo: "acme/payments", number: 248, fetch, token: "t" }), /comes from a fork/);
+});
+
+test("the same repository in another letter case is not a fork", async () => {
+  const { fetch } = fakeGitHub({
+    "/repos/acme/payments/pulls/248": { ...pull, head: { ...pull.head, repo: { full_name: "Acme/Payments" } } },
+    "/repos/acme/payments/pulls/248/commits?per_page=100&page=1": [],
+  });
+  assert.equal((await prepare({ repo: "acme/payments", number: 248, fetch, token: "t" })).number, 248);
+});
+
 test("an unknown pull request fails readably", async () => {
   const { fetch } = fakeGitHub({});
   await assert.rejects(
@@ -112,8 +135,11 @@ test("the prompt names the pull request and both commits", () => {
   const prompt = buildPrompt(template, { repo: "acme/payments", number: 248, baseSha: "base123", headSha: "head456" });
   assert.ok(prompt.includes("#248"));
   assert.ok(prompt.includes("acme/payments"));
-  assert.ok(prompt.includes("git diff base123...head456"));
-  assert.ok(prompt.includes(".crc-brief/pr.json"));
+  assert.ok(prompt.includes("base123"));
+  assert.ok(prompt.includes("head456"));
+  for (const file of [".crc-brief/pr.json", ".crc-brief/diff.patch", ".crc-brief/commits.txt"]) assert.ok(prompt.includes(file), file);
+  // Claude Code has no shell: the prompt must not send it to one.
+  assert.equal(/git (diff|log|show)/.test(prompt), false);
   assert.equal(/\{\{[A-Z_]+\}\}/.test(prompt), false);
 });
 

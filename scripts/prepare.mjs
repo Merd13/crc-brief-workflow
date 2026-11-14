@@ -35,6 +35,14 @@ export async function prepare({ repo, number, fetch, token, apiUrl = "https://ap
   const [org, name] = repo.split("/");
   const base = `${apiUrl}/repos/${repo}/pulls/${number}`;
   const pull = await getJson(fetch, base, token, `Pull request #${number} was not found in ${repo}.`);
+  // A fork's branch is code from outside the repository. A manual run would give it the
+  // generation credential, so it is refused here, for every kind of run.
+  const headRepo = pull.head?.repo?.full_name;
+  if (!headRepo || headRepo.toLowerCase() !== repo.toLowerCase()) {
+    throw new Error(
+      `Pull request #${number} comes from a fork (${headRepo ?? "a deleted repository"}). Briefs are written only for branches of ${repo}.`,
+    );
+  }
   const commits = [];
   // GitHub lists at most 250 commits for a pull request: three pages of 100.
   for (let page = 1; page <= 3; page++) {

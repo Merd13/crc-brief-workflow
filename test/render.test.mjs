@@ -59,11 +59,70 @@ test("mentions do not notify", () => {
   brief.context.uncertainties = ["@someone said so"];
   const readable = readablePart(renderComment(brief, { runUrl }).body);
   assert.equal(/@[A-Za-z0-9_-]/.test(readable), false);
-  assert.ok(readable.includes("@​octocat"));
+  assert.ok(readable.includes("@" + String.fromCharCode(0x200b) + "octocat"));
 });
 
 test("safeText leaves ordinary text alone", () => {
-  assert.equal(safeText("a < b && c > d, mail me @ noon"), "a < b && c > d, mail me @ noon");
+  assert.equal(safeText("a && b > c, mail me @ noon. Done!"), "a && b > c, mail me @ noon. Done!");
+});
+
+test("angle brackets in text show as text, not as HTML", () => {
+  const brief = exampleBrief();
+  brief.items[0].content = "Use Array<string> here, not <img src=x onerror=alert(1)>.";
+  const readable = readablePart(renderComment(brief, { runUrl }).body);
+  assert.ok(readable.includes("Use Array&lt;string> here, not &lt;img src=x onerror=alert(1)>."));
+});
+
+test("code keeps its angle brackets", () => {
+  const brief = exampleBrief();
+  brief.items[0].content = "Call `Map<string, number>` now.\n\n```ts\nconst a: Array<string> = [];\n```\n\nThen <stop>.";
+  const readable = readablePart(renderComment(brief, { runUrl }).body);
+  assert.ok(readable.includes("Call `Map<string, number>` now."));
+  assert.ok(readable.includes("const a: Array<string> = [];"));
+  assert.ok(readable.includes("Then &lt;stop>."));
+});
+
+test("images are not embedded", () => {
+  const brief = exampleBrief();
+  brief.items[0].content = "See ![chart](https://example.invalid/?d=secret) here.";
+  const readable = readablePart(renderComment(brief, { runUrl }).body);
+  assert.equal(readable.includes("![chart]("), false);
+  assert.ok(readable.includes("!\\[chart](https://example.invalid/?d=secret)"));
+});
+
+test("an unclosed code fence is closed, so the data block stays hidden", () => {
+  const brief = exampleBrief();
+  brief.items[0].content = "Example:\n\n```js\nconst a = 1;";
+  brief.items[1].content = "~~~\nopen tilde fence";
+  const { body } = renderComment(brief, { runUrl });
+  const fences = readablePart(body).split("\n").filter((line) => /^\s{0,3}(```|~~~)/.test(line));
+  assert.equal(fences.length, 4);
+  assert.deepEqual(extractBrief(body), brief);
+});
+
+test("every free-text field is made safe, in the full and the compact form", () => {
+  const brief = exampleBrief();
+  brief.readingPath[0].why = "ask @octocat <!-- note";
+  brief.context.approach = "by @octocat";
+  brief.context.problem.documented = "from @octocat";
+  brief.context.problem.interpretation = "says @octocat";
+  brief.meta.model = "model @octocat <!--";
+  brief.items[0].title = "Title @octocat";
+  brief.items[1].title = "Check @octocat";
+  const full = renderComment(brief, { runUrl });
+  for (const body of [full.body, renderComment(brief, { runUrl, cap: full.body.length - 1 }).body]) {
+    const readable = readablePart(body);
+    assert.equal(/@[A-Za-z0-9_-]/.test(readable), false, readable);
+    assert.equal(body.split("<!--").length - 1, 2);
+  }
+});
+
+test("a local run says so and has no run link", () => {
+  const brief = exampleBrief();
+  brief.meta.model = "claude-opus-5-5";
+  const readable = readablePart(renderComment(brief, {}).body);
+  assert.ok(readable.includes("For commit `8f21c9a` of #248. Generated locally by Code Review Companion with claude-opus-5-5."));
+  assert.equal(readable.includes("[run]("), false);
 });
 
 test("readable part shows context, reading path, checks and learnings", () => {

@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { buildComment, run } from "../scripts/post.mjs";
+import { workspaceReader } from "../lib/anchors.mjs";
 import { parseBriefFile } from "../contract/contract.mjs";
 import { extractBrief } from "../lib/render.mjs";
 import { exampleGeneration, examplePr, now, runUrl } from "./helpers.mjs";
@@ -71,6 +74,41 @@ test("bad anchors are removed and recorded, the item stays", () => {
   assert.deepEqual(r.brief.items[0].sourceRefs, []);
   assert.equal(r.brief.meta.droppedAnchors.length, 2);
   assert.equal(parseBriefFile(r.brief).ok, true);
+});
+
+test("an anchor that points outside the repository is removed, with the real reader", () => {
+  const { dir, env } = workspace();
+  try {
+    writeFileSync(join(dir, "outside.txt"), "secret\n".repeat(100));
+    const structuredOutput = output((g) => {
+      g.items[0].sourceRefs = [
+        { path: "../outside.txt", startLine: 1, endLine: 2 },
+        { path: join(dir, "outside.txt"), startLine: 1, endLine: 2 },
+        { path: "src/billing/retry-payment.ts", startLine: 1, endLine: 2 },
+      ];
+      return g;
+    });
+    const r = buildComment({ ...base, structuredOutput, readLines: workspaceReader(env.GITHUB_WORKSPACE) });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.brief.items[0].sourceRefs, [{ path: "src/billing/retry-payment.ts", startLine: 1, endLine: 2 }]);
+    assert.equal(r.brief.meta.droppedAnchors.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the credential step exits 1 with no credential and 0 with one", () => {
+  const script = fileURLToPath(new URL("../scripts/check-credential.mjs", import.meta.url));
+  const runStep = (env) => spawnSync(process.execPath, [script], { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
+  const none = runStep({});
+  assert.equal(none.status, 1);
+  assert.match(none.stdout, /^::error::No generation credential\./);
+  const both = runStep({ CRC_API_KEY: "a", CRC_OAUTH_TOKEN: "b" });
+  assert.equal(both.status, 1);
+  assert.match(both.stdout, /^::error::Two generation credentials are set\./);
+  const one = runStep({ CRC_OAUTH_TOKEN: "tok" });
+  assert.equal(one.status, 0);
+  assert.equal(one.stdout.trim(), "Generation credential: subscription token");
 });
 
 test("a brief that cannot fit reports its size", () => {

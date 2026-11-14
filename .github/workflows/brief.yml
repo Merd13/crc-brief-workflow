@@ -71,12 +71,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Give Claude Code the pull request's text
-        run: |
-          mkdir -p .crc-brief
-          cp "$CRC_PR_FILE" .crc-brief/pr.json
+      - name: Give Claude Code the pull request's text, diff and commits
+        run: node "$CRC_HOME/scripts/inputs.mjs"
 
-      # Claude Code only reads. It returns the brief's judgment parts as structured output.
+      # Claude Code only reads, and only inside the checkout. It has no shell.
+      # It loads no settings, hooks or MCP servers from the repository.
+      # It returns the brief's judgment parts as structured output.
       - name: Write the brief with Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -88,8 +88,10 @@ jobs:
           claude_args: |
             --model ${{ inputs.model }}
             --permission-mode default
-            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
-            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
+            --tools "Read,Grep,Glob"
+            --allowedTools "Read(./**),Grep(./**),Glob(./**)"
+            --setting-sources user
+            --strict-mcp-config
             --json-schema '${{ steps.prepare.outputs.schema }}'
 
       # The only step that writes to GitHub. An invalid brief posts nothing.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { checkAnchors, toLines, workspaceReader } from "../lib/anchors.mjs";
@@ -67,6 +67,14 @@ test("workspaceReader refuses paths outside the root", () => {
     assert.equal(read("missing.txt"), null);
     assert.equal(read("."), null);
     assert.equal(read("src"), null);
+    // A link inside the repository that points outside it must not be read either.
+    symlinkSync(join(parent, "secret.txt"), join(root, "link.txt"));
+    symlinkSync(parent, join(root, "linkdir"));
+    symlinkSync(join(root, "a.txt"), join(root, "inner-link.txt"));
+    assert.equal(read("link.txt"), null);
+    assert.equal(read("linkdir/secret.txt"), null);
+    assert.deepEqual(read("inner-link.txt"), ["x", "y"]);
+    assert.equal(read("a.txt\0.md"), null);
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }
