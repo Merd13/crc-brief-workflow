@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "pr": {
+    "org": "acme",
+    "repo": "payments",
+    "number": 248,
+    "url": "https://github.com/acme/payments/pull/248",
+    "title": "Keep payment retries idempotent",
+    "headSha": "8f21c9a4d3e7b0615c2a9f8e7d6b5a4938271605",
+    "baseSha": "1b2c3d4e5f60718293a4b5c6d7e8f90123456789"
+  },
+  "context": {
+    "problem": {
+      "documented": "Failed payment charges are retried, and a retry can create a second charge when the first attempt actually succeeded.",
+      "interpretation": "A timeout does not show whether the provider processed the charge, so a retry must be recognizable as the same operation."
+    },
+    "approach": "Each retry reuses the original payment's idempotency key. Only transient provider errors are retried, up to an attempt limit.",
+    "components": [
+      "src/billing/retry-payment.ts",
+      "src/billing/payment-client.ts",
+      "tests/billing/retry-payment.test.ts"
+    ],
+    "uncertainties": [
+      "The provider's key-retention window is not documented in this PR.",
+      "The tests do not show the provider's duplicate-charge behavior."
+    ]
+  },
+  "readingPath": [
+    {
+      "path": "src/billing/retry-payment.ts",
+      "why": "The retry logic: key reuse and failure classification.",
+      "itemId": "retry-keeps-identity"
+    },
+    {
+      "path": "src/billing/payment-client.ts",
+      "why": "Where the key is passed to the provider."
+    },
+    {
+      "path": "tests/billing/retry-payment.test.ts",
+      "why": "How retries are tested."
+    }
+  ],
+  "items": [
+    {
+      "id": "retry-keeps-identity",
+      "type": "learning",
+      "title": "A retry keeps the original payment's identity",
+      "content": "A retry reuses the original payment's idempotency key instead of generating a new one.\n\nA timeout does not tell us whether a payment succeeded. Reusing the original key lets the provider recognize a repeated request. Confirming the previous outcome before retrying would give more certainty; this PR trades that for faster automatic recovery within an attempt limit.\n\nTakeaway: a retry repeats an operation. It should preserve that operation's identity.",
+      "sourceRefs": [
+        { "path": "src/billing/retry-payment.ts", "startLine": 45, "endLine": 54 }
+      ]
+    },
+    {
+      "id": "check-retryable-failures",
+      "type": "check",
+      "title": "Check which failures may be retried",
+      "content": "Only transient provider errors enter the retry queue. Permanent failures are returned.\n\nCheck that timeouts and rate limits are classified as transient, while declined payments stop here. The classifier and the attempt limit determine which customer payments are attempted again.",
+      "sourceRefs": [
+        { "path": "src/billing/retry-payment.ts", "startLine": 55, "endLine": 64 }
+      ]
+    }
+  ],
+  "meta": {
+    "source": "import",
+    "generatedAt": "2026-11-10T09:00:00.000Z",
+    "guidanceVersion": "v0.2"
+  }
+}
