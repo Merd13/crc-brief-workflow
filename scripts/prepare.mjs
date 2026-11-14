@@ -21,7 +21,7 @@ export function resolvePrNumber({ event, input }) {
 
 async function getJson(fetch, url, token, notFound) {
   const response = await fetch(url, { headers: githubHeaders(token) });
-  if (response.status === 404 && notFound) throw new Error(notFound);
+  if (response.status === 404 && notFound) throw Object.assign(new Error(notFound), { code: "not_found" });
   if (!response.ok) throw new Error(`GitHub answered ${response.status} for ${new URL(url).pathname}.`);
   return response.json();
 }
@@ -39,8 +39,11 @@ export async function prepare({ repo, number, fetch, token, apiUrl = "https://ap
   // generation credential, so it is refused here, for every kind of run.
   const headRepo = pull.head?.repo?.full_name;
   if (!headRepo || headRepo.toLowerCase() !== repo.toLowerCase()) {
-    throw new Error(
-      `Pull request #${number} comes from a fork (${headRepo ?? "a deleted repository"}). Briefs are written only for branches of ${repo}.`,
+    throw Object.assign(
+      new Error(
+        `Pull request #${number} comes from a fork (${headRepo ?? "a deleted repository"}). Briefs are written only for branches of ${repo}.`,
+      ),
+      { code: "fork" },
     );
   }
   const commits = [];

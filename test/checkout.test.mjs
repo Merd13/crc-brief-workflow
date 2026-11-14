@@ -1,17 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitAuthEnv, HostError, prepareCheckout, removeEscapingSymlinks, validatePr } from "../host/checkout.mjs";
 import { runCommand } from "../lib/inputs.mjs";
-
-const git = (cwd, ...args) =>
-  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], {
-    cwd,
-    encoding: "utf8",
-  }).trim();
+import { git, remoteWithPull } from "./helpers.mjs";
 
 test("validatePr accepts a normal pull request", () => {
   assert.deepEqual(validatePr({ org: "Merd13", repo: "new-flow", number: 1 }), { org: "Merd13", repo: "new-flow", number: 1 });
@@ -51,28 +45,6 @@ test("the token reaches git through the environment, as a header for github.com 
   assert.equal(env.GIT_CONFIG_VALUE_0, "Authorization: Basic " + Buffer.from("x-access-token:t0ken").toString("base64"));
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
 });
-
-/** A bare "remote" with a base commit on main and a pull request head at refs/pull/7/head. */
-function remoteWithPull() {
-  const root = mkdtempSync(join(tmpdir(), "crc-checkout-"));
-  const work = join(root, "work");
-  mkdirSync(work);
-  git(work, "init", "-q", "-b", "main");
-  writeFileSync(join(work, "a.txt"), "one\n");
-  git(work, "add", ".");
-  git(work, "commit", "-q", "-m", "Base");
-  const baseSha = git(work, "rev-parse", "HEAD");
-  git(work, "checkout", "-q", "-b", "feature");
-  writeFileSync(join(work, "a.txt"), "one\ntwo\n");
-  symlinkSync("/etc", join(work, "outside-link"));
-  git(work, "add", ".");
-  git(work, "commit", "-q", "-m", "Change");
-  const headSha = git(work, "rev-parse", "HEAD");
-  const remote = join(root, "remote.git");
-  git(root, "clone", "-q", "--bare", work, remote);
-  git(remote, "update-ref", "refs/pull/7/head", headSha);
-  return { root, remote, baseSha, headSha };
-}
 
 test("prepareCheckout makes a temporary checkout of the pull request head and cleans it up", async () => {
   const { root, remote, baseSha, headSha } = remoteWithPull();
