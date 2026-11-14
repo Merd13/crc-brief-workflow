@@ -1,11 +1,16 @@
 # CRC brief workflow
 
-A reusable GitHub Actions workflow for Code Review Companion (CRC).
-For one pull request, it writes a Review Brief with Claude Code and posts the brief as a PR comment.
+The brief generator of Code Review Companion (CRC).
+For one pull request, it writes a Review Brief with Claude Code and returns it as a PR comment.
+
+It runs in two ways, with the same prompt, schema, validation and comment format:
+
+- **In GitHub Actions**, as a reusable workflow. A run starts when a pull request opens, and the workflow posts the comment. It needs a generation credential as a repository secret.
+- **On your own machine**, as a helper that the CRC browser extension starts. It uses the Claude Code you are signed in to. It needs no API key and no repository secret.
 
 A Review Brief gives reviewers the context of a change, an order to read the files in, and a short list of takeaways. A takeaway is a Learning (something to understand) or a Check (something to verify).
 
-## Use it in a repository
+## Use it in a repository (GitHub Actions)
 
 1. Add this file to the repository's default branch as `.github/workflows/crc-brief.yml`:
 
@@ -58,17 +63,55 @@ The caller file sets two things: the model and the credential.
 - **A pull request opens:** one run starts by itself.
 - **Manual run:** start the `CRC brief` workflow from the Actions tab, or run `gh workflow run crc-brief.yml -f pr_number=123`. Each run posts a new brief comment; earlier comments stay.
 - New commits do not start a run.
-- Pull requests from forks are not supported. GitHub does not give repository secrets to those runs.
+- Pull requests from forks are refused, for every kind of run. A fork's branch is code from outside the repository.
+
+## Generate on your own machine
+
+The CRC extension can start a helper on your machine through Chrome's native messaging. The helper runs your local Claude Code and hands the brief comment back to the extension, which posts it under your GitHub name.
+
+You need macOS or Linux, Node 22 or later, [Claude Code](https://code.claude.com) installed and signed in, and `git`.
+
+1. Clone this repository and keep the folder.
+2. Open the extension's Settings. The **Local Claude Code** section shows the install command with your extension id. Run it in the cloned folder:
+
+   ```sh
+   node host/install.mjs --extension-id <id>
+   ```
+
+3. In Settings, select **Check again**. Then use **Generate brief** on a pull request.
+
+What the installer writes:
+
+- A manifest in Chrome's `NativeMessagingHosts` folder. It names the one extension that may start the helper.
+- A launcher with the full paths of Node, this folder and Claude Code. Chrome starts a helper without your shell's `PATH`.
+
+Run the installer again after you move this folder, or after Node or Claude Code moves. For another Chromium browser, give its folder with `--manifest-dir`. To remove the helper, run `node host/install.mjs --uninstall`.
+
+What a local run does on your machine:
+
+- It fetches the pull request into its own cache (`~/Library/Caches/crc-brief-host` on macOS, `~/.cache/crc-brief-host` on Linux) with the GitHub token the extension sends. The token goes to `git` in the environment of that one command. It is not written to disk. Your own clones are not touched.
+- It makes a temporary checkout, removes symbolic links that point outside it, and deletes the checkout when the run ends.
+- It runs Claude Code with the limits below. Your Claude settings, plugins, hooks and MCP servers are not loaded, and neither are the repository's.
+- Chrome must stay open until the run ends. A small pull request takes about a minute. Usage counts against your own Claude plan.
+
+The helper accepts two requests, a status check and a brief for one pull request. It runs no other command for the extension.
 
 ## What a run does
 
-1. It checks that exactly one credential is set.
+1. In GitHub Actions, it checks that exactly one credential is set.
 2. It reads the pull request from the GitHub API and checks out the head commit.
-3. Claude Code reads the pull request and the repository. Its tools are read-only: `Read`, `Glob`, `Grep`, `git diff`, `git log` and `git show`. It returns the brief's context, reading path and takeaways as structured output.
-4. The posting step adds the pull request facts and the metadata. It removes each code reference that does not exist at the head commit and records it in `meta.droppedAnchors`. Then it validates the brief against the contract.
-5. The posting step posts the comment with the workflow's own token, so the author is `github-actions[bot]`.
+3. It writes the pull request's text, the diff and the commit messages into a `.crc-brief` folder in the checkout.
+4. Claude Code reads those files and the repository, and returns the brief's context, reading path and takeaways as structured output.
+5. The next step adds the pull request facts and the metadata. It removes each code reference that does not exist at the head commit and records it in `meta.droppedAnchors`. Then it validates the brief against the contract and renders the comment.
+6. In GitHub Actions, the workflow posts the comment with its own token, so the author is `github-actions[bot]`. On your machine, the extension posts it, so the author is you.
 
 A run that fails, or whose brief is not valid, posts nothing.
+
+### What Claude Code may do
+
+- Its only tools are `Read`, `Grep` and `Glob`, and each is allowed only inside the checkout. It has no shell, cannot write, and cannot reach the network.
+- It loads no Claude settings, hooks or MCP servers from the repository.
+- Text in a pull request can try to steer a model. These limits keep such a run from reading anything outside the checkout or changing anything at all.
 
 ## Comment format
 
@@ -87,8 +130,9 @@ Tools that read the brief, such as the CRC extension, rely on this layout.
 - The first line is exactly `<!-- crc-brief:v1 -->`.
 - The data block is the last thing in the body: a line `<!-- crc-brief-data`, one line of JSON, and a line `-->`.
 - The JSON is the brief in the contract format. Every `<` is written as `<` and every `>` as `>`, so the JSON cannot contain `-->`. `JSON.parse` reads it unchanged.
-- In the readable part, `<!--` is written as `&lt;!--`. The body therefore holds exactly two HTML comments.
-- In the readable part, each `@name` gets a zero-width space after the `@`, so a brief never notifies a user.
+- The readable part treats brief text as untrusted. Outside code, `<` is written as `&lt;`, `![` as `!\[`, and each `@name` gets a zero-width space after the `@`. A brief therefore cannot add HTML, embed an image or notify a user. Inside code, `<!--` gets a zero-width space after the `<`. The body always holds exactly two HTML comments.
+- A code block that the brief leaves open is closed, so it cannot swallow the data block.
+- A brief from GitHub Actions links to its run. A brief from a reviewer's machine says `Generated locally`.
 - The brief has `meta.source: "generated"` and no `published` block.
 - A GitHub comment holds at most 65,536 characters. When the full body is longer, the readable part lists item titles only and the JSON stays complete. When that is still too long, the run fails.
 
@@ -128,5 +172,8 @@ node --test
 | `.github/workflows/brief.yml` | The reusable workflow. |
 | `prompt/brief-prompt.md` | The prompt for Claude Code. It follows CRC's extraction guidance, version `v0.2`. |
 | `scripts/` | The entry point of each workflow step. |
-| `lib/` | The logic behind the steps. |
-| `test/` | Tests for `lib/` and `scripts/`. |
+| `lib/` | The logic both runners share. |
+| `host/` | The local helper: message format, checkout, one run, entry point and installer. |
+| `test/` | Tests for all of the above. |
+
+The helper's messages are JSON, framed as Chrome native messaging requires. Requests: `{ id, type: "ping" }` and `{ id, type: "generate", pr: { org, repo, number }, token, model? }`. Replies: `{ id, type: "progress", stage }`, then `{ id, ok: true, value }` or `{ id, ok: false, error: { code, message } }`.
