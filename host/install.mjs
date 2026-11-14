@@ -14,6 +14,7 @@ export const HOST_NAME = "com.code_review_companion.brief_host";
 
 // Chrome's ids are 32 letters from a to p.
 const isExtensionId = (value) => typeof value === "string" && /^[a-p]{32}$/.test(value);
+const BAD_EXTENSION_ID = "That is not an extension id. Copy the id from the extension's Settings page: 32 letters from a to p.";
 // For a POSIX shell: inside single quotes only the single quote itself needs care.
 const quote = (text) => "'" + String(text).replaceAll("'", "'\\''") + "'";
 
@@ -25,9 +26,7 @@ const quote = (text) => "'" + String(text).replaceAll("'", "'\\''") + "'";
  */
 export function installPlan({ extensionId, platform, homeDir, nodePath, claudePath, repoDir, manifestDir }) {
   const { defaultManifestDir, launcherPath } = locations(platform, homeDir);
-  if (!isExtensionId(extensionId)) {
-    throw new Error("That is not an extension id. Copy the id from the extension's Settings page: 32 letters from a to p.");
-  }
+  if (!isExtensionId(extensionId)) throw new Error(BAD_EXTENSION_ID);
   return {
     manifestPath: join(manifestDir ?? defaultManifestDir, `${HOST_NAME}.json`),
     launcherPath,
@@ -88,6 +87,8 @@ function main(args) {
   if (!extensionId) {
     throw new Error("Usage: node host/install.mjs --extension-id <id>\nThe extension's Settings page shows this command with your id filled in.");
   }
+  // Checked before anything is looked up, so a wrong id is the first thing reported.
+  if (!isExtensionId(extensionId)) throw new Error(BAD_EXTENSION_ID);
   const claudePath = option(args, "--claude") ?? findClaude();
   if (!claudePath) {
     throw new Error("Could not find Claude Code. Install it (https://code.claude.com), or give its path with --claude <path>.");
