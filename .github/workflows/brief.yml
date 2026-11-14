@@ -1,0 +1,102 @@
+name: CRC brief
+
+# Reusable workflow. A repository calls it from one thin workflow file (see README.md).
+# It writes a Code Review Companion brief for one pull request and posts it as a PR comment.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Claude model that writes the brief.
+        type: string
+        default: claude-opus-5-5
+      pr_number:
+        description: Pull request number. Only for manual runs; a pull_request run uses its own PR.
+        type: string
+        default: ""
+    secrets:
+      anthropic_api_key:
+        description: Anthropic API key. Set this or claude_code_oauth_token, not both.
+        required: false
+      claude_code_oauth_token:
+        description: Claude subscription token. Set this or anthropic_api_key, not both.
+        required: false
+
+jobs:
+  brief:
+    name: Write the brief
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # The scripts, the prompt and the contract come from this workflow's own repository,
+      # at the same commit as this file.
+      - name: Get the workflow's files
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .crc-workflow
+          persist-credentials: false
+
+      - name: Move them out of the workspace
+        run: |
+          mv .crc-workflow "$RUNNER_TEMP/crc-workflow"
+          echo "CRC_HOME=$RUNNER_TEMP/crc-workflow" >> "$GITHUB_ENV"
+          echo "CRC_PR_FILE=$RUNNER_TEMP/crc-pr.json" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the generation credential
+        env:
+          CRC_API_KEY: ${{ secrets.anthropic_api_key }}
+          CRC_OAUTH_TOKEN: ${{ secrets.claude_code_oauth_token }}
+        run: node "$CRC_HOME/scripts/check-credential.mjs"
+
+      - name: Find the pull request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: node "$CRC_HOME/scripts/prepare.mjs"
+
+      - name: Check out the pull request's head commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.prepare.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Give Claude Code the pull request's text
+        run: |
+          mkdir -p .crc-brief
+          cp "$CRC_PR_FILE" .crc-brief/pr.json
+
+      # Claude Code only reads. It returns the brief's judgment parts as structured output.
+      - name: Write the brief with Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          claude_args: |
+            --model ${{ inputs.model }}
+            --permission-mode default
+            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
+            --json-schema '${{ steps.prepare.outputs.schema }}'
+
+      # The only step that writes to GitHub. An invalid brief posts nothing.
+      - name: Validate and post the brief comment
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_MODEL: ${{ inputs.model }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node "$CRC_HOME/scripts/post.mjs"
