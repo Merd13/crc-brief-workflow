@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitAuthEnv, HostError, prepareCheckout, removeEscapingSymlinks, validatePr } from "../host/checkout.mjs";
+import { gitAuthEnv, HostError, prepareCheckout, removeEscapingSymlinks, removeStaleRuns, validatePr } from "../host/checkout.mjs";
 import { runCommand } from "../lib/inputs.mjs";
 import { git, remoteWithPull } from "./helpers.mjs";
 
@@ -133,5 +133,33 @@ test("removeEscapingSymlinks removes links that leave the folder and keeps the r
     assert.equal(lstatSync(join(dir, ".git", "internal")).isSymbolicLink(), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("removeStaleRuns deletes checkouts that a stopped run left behind, and only those", () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), "crc-stale-"));
+  try {
+    const now = Date.parse("2026-11-14T12:00:00Z");
+    const make = (name, ageHours) => {
+      const dir = join(cacheDir, "runs", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "code.txt"), "pull request code\n");
+      const at = new Date(now - ageHours * 3600 * 1000);
+      utimesSync(dir, at, at);
+      return dir;
+    };
+    const old = make("old", 30);
+    const fresh = make("fresh", 1);
+    mkdirSync(join(cacheDir, "repos", "acme", "payments.git"), { recursive: true });
+
+    assert.deepEqual(removeStaleRuns(cacheDir, now), ["old"]);
+    assert.equal(existsSync(old), false);
+    assert.equal(existsSync(fresh), true);
+    assert.equal(existsSync(join(cacheDir, "repos", "acme", "payments.git")), true);
+    // Nothing to do, and no cache yet, are both fine.
+    assert.deepEqual(removeStaleRuns(cacheDir, now), []);
+    assert.deepEqual(removeStaleRuns(join(cacheDir, "missing"), now), []);
+  } finally {
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 });

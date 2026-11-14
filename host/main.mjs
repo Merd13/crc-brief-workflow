@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "../lib/actions.mjs";
 import { runCommand } from "../lib/inputs.mjs";
-import { HostError } from "./checkout.mjs";
+import { HostError, removeStaleRuns } from "./checkout.mjs";
 import { claudeRunner, generate } from "./generate.mjs";
 import { createDecoder, encodeMessage } from "./protocol.mjs";
 
@@ -96,6 +96,7 @@ function main() {
     home: fileURLToPath(new URL("..", import.meta.url)),
     now: () => new Date().toISOString(),
   };
+  removeStaleRuns(deps.cacheDir);
   const context = {
     send: (message) => process.stdout.write(encodeMessage(message)),
     claudePath,

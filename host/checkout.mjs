@@ -1,7 +1,7 @@
 // The helper's own copy of a pull request's code: a cached bare repository per GitHub
 // repository, and one temporary checkout per run. The reviewer's clones are never touched.
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 /** An error the extension can show. `code` is one of the helper's error codes. */
@@ -76,6 +76,34 @@ export function removeEscapingSymlinks(dir) {
     }
   };
   visit(root);
+  return removed;
+}
+
+/** A run takes minutes. A checkout this old belongs to a run that was killed before it could clean up. */
+export const STALE_RUN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Deletes temporary checkouts that a stopped run left behind (for example, Chrome was killed).
+ * They hold pull request code, so they must not stay on disk.
+ * @param {string} cacheDir
+ * @param {number} [now] milliseconds since the epoch
+ * @returns {string[]} the names of the removed folders
+ */
+export function removeStaleRuns(cacheDir, now = Date.now()) {
+  const runs = join(cacheDir, "runs");
+  if (!existsSync(runs)) return [];
+  const removed = [];
+  for (const name of readdirSync(runs)) {
+    const dir = join(runs, name);
+    try {
+      if (now - statSync(dir).mtimeMs > STALE_RUN_MS) {
+        rmSync(dir, { recursive: true, force: true });
+        removed.push(name);
+      }
+    } catch {
+      // Another helper process may be removing it at the same moment.
+    }
+  }
   return removed;
 }
 
