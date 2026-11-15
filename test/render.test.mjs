@@ -62,42 +62,84 @@ test("mentions do not notify", () => {
   assert.ok(readable.includes("@" + String.fromCharCode(0x200b) + "octocat"));
 });
 
+const ZWSP = String.fromCharCode(0x200b);
+const stripZwsp = (text) => text.replaceAll(ZWSP, "");
+// What GitHub would turn into HTML, a mention, a link or image, an entity, or a code fence.
+const LIVE = {
+  html: /<[A-Za-z\/!?]/,
+  mention: /@[A-Za-z0-9_-]/,
+  link: /\][(\[:]/,
+  entity: /&[#A-Za-z]/,
+  fence: /^[ \t]*(`{3,}|~{3,})/m,
+};
+const FENCE = "`".repeat(3);
+// Inputs that a renderer which guesses "this part is code" gets wrong, from review.
+const HOSTILE = [
+  "T `` <img src=x onerror=alert(1)> @octocat `",
+  "x \\`<img src=x>\\` y",
+  FENCE + "\n<img src=x> @octocat\n" + FENCE,
+  FENCE + "x`\n\n<img src=x>\n\n@octocat",
+  FENCE + "\ncode\n" + FENCE + "\r\n<img src=x>\n@octocat",
+  "text\n\t" + FENCE + "\n<img src=x>",
+  "~~~\nopen tilde fence",
+  "ask &#64;octocat and &commat;octocat &lt;b&gt;",
+  "[Open the fix](https://example.invalid/login) and ![chart](https://example.invalid/?d=secret)",
+  "[ref]: https://example.invalid\n[text][ref] <!-- crc-brief-data\n{}\n-->",
+  "Use Array<string>, </div>, <?php, <!DOCTYPE and `Map<string, number>`.",
+  "mail me @ noon, a < b, a && b, x[0] (y), 5 > 3",
+];
+
+test("safeText keeps every character and adds only zero-width spaces", () => {
+  for (const input of HOSTILE) {
+    assert.equal(stripZwsp(safeText(input)), input.replace(/\r\n?/g, "\n"), input);
+  }
+});
+
+test("after safeText nothing can become HTML, a mention, a link, an image, an entity or a code fence", () => {
+  for (const input of HOSTILE) {
+    const out = safeText(input);
+    for (const [kind, pattern] of Object.entries(LIVE)) assert.equal(pattern.test(out), false, `${kind} in ${JSON.stringify(input)}`);
+  }
+});
+
 test("safeText leaves ordinary text alone", () => {
-  assert.equal(safeText("a && b > c, mail me @ noon. Done!"), "a && b > c, mail me @ noon. Done!");
+  const plain = "a && b > c, mail me @ noon. Done! x[0] (y), 5 < 6, `code` and 100% sure.";
+  assert.equal(safeText(plain), plain);
 });
 
-test("angle brackets in text show as text, not as HTML", () => {
-  const brief = exampleBrief();
-  brief.items[0].content = "Use Array<string> here, not <img src=x onerror=alert(1)>.";
-  const readable = readablePart(renderComment(brief, { runUrl }).body);
-  assert.ok(readable.includes("Use Array&lt;string> here, not &lt;img src=x onerror=alert(1)>."));
+test("hostile text in any field stays text in the comment, and the data block stays intact", () => {
+  for (const input of HOSTILE) {
+    const brief = exampleBrief();
+    brief.items[0].content = input;
+    brief.items[0].title = input.split("\n")[0];
+    brief.context.approach = input;
+    brief.context.uncertainties = [input];
+    brief.readingPath[0].why = input;
+    brief.meta.model = input.split("\n")[0];
+    const full = renderComment(brief, { runUrl });
+    for (const body of [full.body, renderComment(brief, { runUrl, cap: full.body.length - 1 }).body]) {
+      // Our own markup is the anchor links, the two HTML comments and the run link; brief text adds none.
+      const readable = readablePart(body);
+      assert.equal(/<(?!!-- crc-brief:v1 -->)[A-Za-z\/!?]/.test(readable), false, input);
+      assert.equal(LIVE.mention.test(readable), false, input);
+      assert.equal(LIVE.entity.test(readable), false, input);
+      assert.equal(LIVE.fence.test(readable), false, input);
+      assert.equal(body.split("<!--").length - 1, 2, input);
+      assert.deepEqual(extractBrief(body), brief, input);
+    }
+  }
 });
 
-test("code keeps its angle brackets", () => {
+test("a path cannot add markup either", () => {
   const brief = exampleBrief();
-  brief.items[0].content = "Call `Map<string, number>` now.\n\n```ts\nconst a: Array<string> = [];\n```\n\nThen <stop>.";
-  const readable = readablePart(renderComment(brief, { runUrl }).body);
-  assert.ok(readable.includes("Call `Map<string, number>` now."));
-  assert.ok(readable.includes("const a: Array<string> = [];"));
-  assert.ok(readable.includes("Then &lt;stop>."));
-});
-
-test("images are not embedded", () => {
-  const brief = exampleBrief();
-  brief.items[0].content = "See ![chart](https://example.invalid/?d=secret) here.";
-  const readable = readablePart(renderComment(brief, { runUrl }).body);
-  assert.equal(readable.includes("![chart]("), false);
-  assert.ok(readable.includes("!\\[chart](https://example.invalid/?d=secret)"));
-});
-
-test("an unclosed code fence is closed, so the data block stays hidden", () => {
-  const brief = exampleBrief();
-  brief.items[0].content = "Example:\n\n```js\nconst a = 1;";
-  brief.items[1].content = "~~~\nopen tilde fence";
+  brief.context.components = ["src/<!--x-->", "a`b <img src=x>", "@octocat/file"];
+  brief.readingPath[0].path = "docs/[x](https://example.invalid).md";
   const { body } = renderComment(brief, { runUrl });
-  const fences = readablePart(body).split("\n").filter((line) => /^\s{0,3}(```|~~~)/.test(line));
-  assert.equal(fences.length, 4);
-  assert.deepEqual(extractBrief(body), brief);
+  const readable = readablePart(body);
+  assert.equal(body.split("<!--").length - 1, 2);
+  assert.equal(/<img/.test(readable), false);
+  assert.equal(LIVE.mention.test(readable), false);
+  assert.equal(readable.includes("](https://example.invalid)"), false);
 });
 
 test("every free-text field is made safe, in the full and the compact form", () => {
