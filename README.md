@@ -133,7 +133,7 @@ Tools that read the brief, such as the CRC extension, rely on this layout.
 - The data block is the last thing in the body: a line `<!-- crc-brief-data`, one line of JSON, and a line `-->`.
 - The JSON is the brief in the contract format. Every `<` is written as `<` and every `>` as `>`, so the JSON cannot contain `-->`. `JSON.parse` reads it unchanged.
 - The readable part treats brief text as untrusted. Each sequence that GitHub would make live gets a zero-width space inside it: an HTML tag or comment, an `@name`, a link or image, a character entity, and a code fence. The text looks the same. A brief therefore cannot add HTML, embed an image, hide a link's address, notify a user or open a code block, and the body always holds exactly two HTML comments.
-- A brief from GitHub Actions links to its run. A brief from a reviewer's machine says `Generated locally`.
+- A brief from GitHub Actions links to its run. A brief from a reviewer's machine says `Generated locally`. A brief that a reviewer imported from a file says `Imported`.
 - The brief has `meta.source: "generated"` and no `published` block.
 - A GitHub comment holds at most 65,536 characters. When the full body is longer, the readable part lists item titles only and the JSON stays complete. When that is still too long, the run fails.
 
