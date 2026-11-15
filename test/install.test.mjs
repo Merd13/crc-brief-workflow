@@ -124,3 +124,22 @@ test("the installer explains itself when the extension id is missing or wrong", 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a relative --claude path is stored as a full path", () => {
+  const home = mkdtempSync(join(tmpdir(), "crc-install-"));
+  try {
+    const manifestDir = join(home, "hosts");
+    const installed = spawnSync(process.execPath, [installer, "--extension-id", ID, "--claude", "bin/claude", "--manifest-dir", manifestDir], {
+      encoding: "utf8",
+      cwd: home,
+      env: { ...process.env, HOME: home },
+    });
+    assert.equal(installed.status, 0, installed.stderr);
+    const manifest = JSON.parse(readFileSync(join(manifestDir, `${HOST_NAME}.json`), "utf8"));
+    const launcher = readFileSync(manifest.path, "utf8");
+    assert.match(launcher, /--claude '\/[^']*\/bin\/claude'/);
+    assert.equal(launcher.includes("--claude 'bin/claude'"), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

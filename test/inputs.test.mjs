@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand, writeBriefInputs } from "../lib/inputs.mjs";
@@ -79,4 +79,48 @@ test("a commit id that is not a commit id never reaches git", async () => {
     /not a commit id/,
   );
   assert.equal(calls.length, 0);
+});
+
+test("the diff never runs a text converter", async () => {
+  const calls = [];
+  const run = async (command, args) => (calls.push(args), "");
+  const dir = mkdtempSync(join(tmpdir(), "crc-inputs-"));
+  try {
+    await writeBriefInputs({ cwd: dir, pr: { baseSha: "a".repeat(40), headSha: "b".repeat(40) }, run });
+    const diff = calls.find((args) => args[0] === "diff");
+    assert.ok(diff.includes("--no-textconv"));
+    assert.ok(diff.includes("--no-ext-diff"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a .crc-brief that the pull request supplies is replaced, not followed", async () => {
+  const { dir, baseSha, headSha } = repoWithBranch();
+  try {
+    // As a link to a folder of the repository: the inputs must not land in that folder.
+    mkdirSync(join(dir, "src"));
+    symlinkSync("src", join(dir, ".crc-brief"));
+    await writeBriefInputs({ cwd: dir, pr: { baseSha, headSha }, run: runCommand });
+    assert.equal(existsSync(join(dir, "src", "pr.json")), false);
+    assert.equal(lstatSync(join(dir, ".crc-brief")).isDirectory(), true);
+    assert.equal(existsSync(join(dir, ".crc-brief", "diff.patch")), true);
+    // As a regular file: the run must not fail.
+    rmSync(join(dir, ".crc-brief"), { recursive: true });
+    writeFileSync(join(dir, ".crc-brief"), "not a folder\n");
+    await writeBriefInputs({ cwd: dir, pr: { baseSha, headSha }, run: runCommand });
+    assert.equal(existsSync(join(dir, ".crc-brief", "pr.json")), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCommand stops a command when asked to, and after its time limit", async () => {
+  const controller = new AbortController();
+  const stopped = runCommand("sleep", ["30"], { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(stopped);
+  const started = Date.now();
+  await assert.rejects(runCommand("sleep", ["30"], { timeoutMs: 200 }));
+  assert.ok(Date.now() - started < 5000);
 });

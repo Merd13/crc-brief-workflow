@@ -38,11 +38,25 @@ export function validatePr(pr) {
  */
 export function gitAuthEnv(token) {
   return {
-    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_COUNT: "2",
     GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
     GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from(`x-access-token:${token}`).toString("base64"),
+    // The fetch keeps the user's git configuration, because a proxy may be set there. It runs no hooks from it.
+    GIT_CONFIG_KEY_1: "core.hooksPath",
+    GIT_CONFIG_VALUE_1: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
   };
+}
+
+/**
+ * Wraps a command runner so that git ignores the user's and the system's configuration.
+ * Every git command that touches pull request content runs this way. Otherwise a .gitattributes
+ * file in the pull request could select a filter or a text converter that the reviewer has
+ * configured, and a global hook would run in the checkout.
+ */
+export function isolatedGit(run) {
+  return (command, args, options = {}) =>
+    run(command, args, { ...options, env: { ...options.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
 }
 
 /**
@@ -120,14 +134,19 @@ export async function prepareCheckout({ cacheDir, org, repo, number, headSha, ba
   if (!isCommitId(headSha) || !isCommitId(baseSha)) throw new HostError("invalid", "The pull request's commit ids are not valid.");
 
   const bare = join(cacheDir, "repos", org, `${repo}.git`);
-  if (!existsSync(bare)) {
+  const isolated = isolatedGit(run);
+  // Every command names the repository. Git must never search the folders above the cache for one:
+  // a home folder kept in git would otherwise receive the pull request.
+  const inBare = `--git-dir=${bare}`;
+  // HEAD exists only after `git init` finished. A folder alone can be left by a run that was killed.
+  if (!existsSync(join(bare, "HEAD"))) {
     mkdirSync(bare, { recursive: true });
-    await run("git", ["init", "--bare", "--quiet", bare]);
+    await isolated("git", ["init", "--bare", "--quiet", bare]);
   }
   try {
     await run(
       "git",
-      ["fetch", "--no-tags", "--quiet", `https://github.com/${org}/${repo}.git`, `+refs/pull/${number}/head:refs/crc/pull/${number}`, baseSha],
+      [inBare, "fetch", "--no-tags", "--quiet", `https://github.com/${org}/${repo}.git`, `+refs/pull/${number}/head:refs/crc/pull/${number}`, baseSha],
       { cwd: bare, env: gitAuthEnv(token) },
     );
   } catch (error) {
@@ -141,17 +160,17 @@ export async function prepareCheckout({ cacheDir, org, repo, number, headSha, ba
   mkdirSync(join(cacheDir, "runs"), { recursive: true });
   const dir = join(cacheDir, "runs", randomUUID());
   try {
-    await run("git", ["worktree", "add", "--detach", "--quiet", dir, headSha], { cwd: bare });
+    await isolated("git", [inBare, "worktree", "add", "--detach", "--quiet", dir, headSha], { cwd: bare });
   } catch {
     // The fetch brought the pull request's newest head. If that is no longer `headSha`, somebody pushed.
     throw new HostError("github", "The pull request changed while the brief was being prepared. Try again.");
   }
   const cleanup = async () => {
     try {
-      await run("git", ["worktree", "remove", "--force", dir], { cwd: bare });
+      await isolated("git", [inBare, "worktree", "remove", "--force", dir], { cwd: bare });
     } catch {
       rmSync(dir, { recursive: true, force: true });
-      await run("git", ["worktree", "prune"], { cwd: bare }).catch(() => {});
+      await isolated("git", [inBare, "worktree", "prune"], { cwd: bare }).catch(() => {});
     }
   };
   try {

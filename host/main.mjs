@@ -3,7 +3,7 @@
 // and closes its input when the port closes. It answers two requests: "ping" and "generate".
 // Standard output carries only framed messages; anything else goes to standard error.
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "../lib/actions.mjs";
 import { runCommand } from "../lib/inputs.mjs";
@@ -15,6 +15,9 @@ import { createDecoder, encodeMessage } from "./protocol.mjs";
 export const HOST_VERSION = "1";
 
 const isId = (value) => typeof value === "string" || typeof value === "number";
+/** An error message is cut to this length, so an answer always fits in one message to Chrome. */
+const MAX_ERROR_LENGTH = 4000;
+const cut = (text) => (text.length > MAX_ERROR_LENGTH ? text.slice(0, MAX_ERROR_LENGTH) + "…" : text);
 
 /**
  * Handles one request and sends its replies.
@@ -29,7 +32,7 @@ export async function handleMessage(message, context) {
     return;
   }
   const { id, type } = message;
-  const fail = (code, text) => send({ id, ok: false, error: { code, message: text } });
+  const fail = (code, text) => send({ id, ok: false, error: { code, message: cut(String(text)) } });
 
   if (type === "ping") {
     const claude = { path: context.claudePath, version: null };
@@ -84,8 +87,9 @@ export function cacheDirFor(platform, env, home) {
 function main() {
   const flag = process.argv.indexOf("--claude");
   const claudePath = flag === -1 ? undefined : process.argv[flag + 1];
-  if (!claudePath) {
-    console.error("Usage: node host/main.mjs --claude <path to the claude program>. Run host/install.mjs instead of starting this by hand.");
+  // A full path only: a relative one would be looked up inside the pull request's checkout.
+  if (!claudePath || !isAbsolute(claudePath)) {
+    console.error("Usage: node host/main.mjs --claude <full path of the claude program>. Run host/install.mjs instead of starting this by hand.");
     process.exit(2);
   }
   const deps = {

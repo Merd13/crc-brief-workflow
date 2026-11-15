@@ -44,6 +44,8 @@ test("the Action uses the same tool limits", () => {
   assert.equal(workflow.includes("Bash("), false);
   // The repository's own Claude settings, hooks and MCP servers must not shape the run.
   assert.ok(workflow.includes("--setting-sources user"));
+  // "default" denies every tool call that no rule allows. Any other mode would loosen the limits.
+  assert.deepEqual(workflow.match(/--permission-mode \S+/g), ["--permission-mode default"]);
   assert.ok(workflow.includes("--strict-mcp-config"));
   assert.equal(/--allowedTools "[^"]*\b(Read|Grep|Glob)[,"]/.test(workflow), false, "no bare tool rule");
 });

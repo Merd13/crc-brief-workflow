@@ -8,11 +8,17 @@ import { localClaudeArgs } from "../lib/claude-args.mjs";
 import { INPUT_DIR, writeBriefInputs } from "../lib/inputs.mjs";
 import { buildComment } from "../scripts/post.mjs";
 import { buildPrompt, prepare } from "../scripts/prepare.mjs";
-import { HostError, prepareCheckout, validatePr } from "./checkout.mjs";
+import { HostError, isolatedGit, prepareCheckout, validatePr } from "./checkout.mjs";
 
 export const DEFAULT_MODEL = "claude-opus-5-5";
 /** Claude Code is stopped after this long. */
 export const CLAUDE_TIMEOUT_MS = 20 * 60 * 1000;
+/** One git command is stopped after this long. A stalled fetch must not hold the run forever. */
+export const GIT_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Printable characters without spaces, as GitHub tokens are. Anything else is refused before use:
+// a line break would make the request library fail with the token in its error text.
+const isToken = (value) => typeof value === "string" && /^[\x21-\x7e]{1,255}$/.test(value);
 
 // The model name becomes a command-line argument. A leading "-" would make it an option.
 const isModel = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,99}$/.test(value);
@@ -60,10 +66,12 @@ export function claudeRunner(claudePath, timeoutMs = CLAUDE_TIMEOUT_MS) {
  */
 export async function generate({ pr, token, model = DEFAULT_MODEL, deps, onProgress = () => {}, signal }) {
   const { org, repo, number } = validatePr(pr);
-  if (typeof token !== "string" || token.trim() === "") throw new HostError("invalid", "The request has no GitHub token.");
+  if (!isToken(token)) throw new HostError("invalid", "The request has no usable GitHub token.");
   if (!isModel(model)) throw new HostError("invalid", "The model name is not valid.");
   const started = Date.now();
   const fullName = `${org}/${repo}`;
+  // Every command can be stopped: by the caller, and by a time limit.
+  const run = (command, args, options) => deps.run(command, args, { ...options, signal, timeoutMs: GIT_TIMEOUT_MS });
 
   onProgress("reading_pr");
   let facts;
@@ -72,7 +80,7 @@ export async function generate({ pr, token, model = DEFAULT_MODEL, deps, onProgr
   } catch (error) {
     if (error.code === "not_found") throw new HostError("not_found", error.message);
     if (error.code === "fork") throw new HostError("invalid", error.message);
-    throw new HostError("github", `Could not read pull request #${number} of ${fullName} from GitHub. ${error.message}`);
+    throw new HostError("github", `Could not read pull request #${number} of ${fullName} from GitHub. ${String(error.message).replaceAll(token, "[token]")}`);
   }
   stopIfCancelled(signal);
 
@@ -85,11 +93,11 @@ export async function generate({ pr, token, model = DEFAULT_MODEL, deps, onProgr
     headSha: facts.headSha,
     baseSha: facts.baseSha,
     token,
-    run: deps.run,
+    run,
   });
   try {
     stopIfCancelled(signal);
-    await writeBriefInputs({ cwd: checkout.dir, pr: facts, run: deps.run });
+    await writeBriefInputs({ cwd: checkout.dir, pr: facts, run: isolatedGit(run) });
 
     onProgress("analyzing");
     const prompt = buildPrompt(readFileSync(join(deps.home, "prompt/brief-prompt.md"), "utf8"), {

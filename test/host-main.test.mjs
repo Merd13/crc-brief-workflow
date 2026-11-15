@@ -143,3 +143,17 @@ test("the real helper refuses to start without the path of Claude Code", async (
   const { exited } = startHelper([]);
   assert.equal(await exited, 2);
 });
+
+test("a very long error message is cut, so the answer always fits in one message", async () => {
+  const { sent, context } = harness({ generate: async () => Promise.reject(new HostError("invalid_brief", "x".repeat(50000))) });
+  await handleMessage({ id: 8, type: "generate", pr: {}, token: "t" }, context);
+  assert.equal(sent[0].error.code, "invalid_brief");
+  assert.ok(sent[0].error.message.length <= 4001);
+  assert.ok(sent[0].error.message.endsWith("…"));
+});
+
+test("the real helper refuses a relative path for Claude Code", async () => {
+  // A relative path would be looked up inside the pull request's checkout.
+  const { exited } = startHelper(["--claude", "bin/claude"]);
+  assert.equal(await exited, 2);
+});

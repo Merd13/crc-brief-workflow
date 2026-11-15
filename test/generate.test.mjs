@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MODEL, generate } from "../host/generate.mjs";
+import { claudeRunner, DEFAULT_MODEL, generate } from "../host/generate.mjs";
 import { HostError } from "../host/checkout.mjs";
 import { localClaudeArgs } from "../lib/claude-args.mjs";
 import { runCommand } from "../lib/inputs.mjs";
@@ -213,4 +214,91 @@ test("the token appears in no error message", async () => {
   } finally {
     cleanup();
   }
+});
+
+test("a token that is not a plain token is refused and never shown", async () => {
+  const { deps, cleanup } = setup();
+  try {
+    for (const token of ["abc\ndef", "abc def", "tok\u0000en", "x".repeat(300), 7, null]) {
+      const error = await generate({ pr: request.pr, token, deps: { ...deps, fetch: () => assert.fail("no request expected") } }).catch((e) => e);
+      assert.ok(error instanceof HostError && error.code === "invalid", String(token));
+      if (typeof token === "string") assert.equal(error.message.includes(token), false);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("the token is removed from Claude Code's own failure text", async () => {
+  const { deps, cleanup } = setup({
+    claude: async () => ({ code: 1, stdout: JSON.stringify({ is_error: true, result: "request with t0ken failed" }), stderr: "t0ken again" }),
+  });
+  try {
+    const error = await generate({ ...request, deps }).catch((e) => e);
+    assert.equal(error.code, "claude_failed");
+    assert.equal(error.message.includes("t0ken"), false, error.message);
+    assert.ok(error.message.includes("[token]"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("every git command gets the stop signal and a time limit", async () => {
+  const { deps, cleanup } = setup();
+  try {
+    const controller = new AbortController();
+    const seen = [];
+    const run = (command, args, options) => (seen.push(options ?? {}), deps.run(command, args, options));
+    await generate({ ...request, deps: { ...deps, run }, signal: controller.signal });
+    assert.ok(seen.length >= 5);
+    for (const options of seen) {
+      assert.equal(options.signal, controller.signal);
+      assert.ok(options.timeoutMs > 0);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+/** A stand-in for the claude program: a script that never finishes on its own. */
+function sleepingProgram() {
+  const dir = mkdtempSync(join(tmpdir(), "crc-claude-"));
+  const path = join(dir, "claude");
+  writeFileSync(path, "#!/bin/sh\nexec sleep 30\n");
+  chmodSync(path, 0o755);
+  return { dir, path };
+}
+
+test("claudeRunner stops Claude Code after its time limit and says so", async () => {
+  const { dir, path } = sleepingProgram();
+  try {
+    const started = Date.now();
+    const result = await claudeRunner(path, 200)({ args: [], cwd: dir });
+    assert.ok(Date.now() - started < 5000);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Claude Code did not finish within/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claudeRunner stops Claude Code when the run is stopped", async () => {
+  const { dir, path } = sleepingProgram();
+  try {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = claudeRunner(path)({ args: [], cwd: dir, signal: controller.signal });
+    setTimeout(() => controller.abort(), 100);
+    const result = await pending;
+    assert.ok(Date.now() - started < 5000);
+    assert.notEqual(result.code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claudeRunner reports a program that cannot be started", async () => {
+  const result = await claudeRunner("/nonexistent/claude")({ args: [], cwd: tmpdir() });
+  assert.equal(result.code, null);
+  assert.match(result.stderr, /ENOENT/);
 });

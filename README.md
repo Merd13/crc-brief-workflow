@@ -91,6 +91,8 @@ What a local run does on your machine:
 
 - It fetches the pull request into its own cache (`~/Library/Caches/crc-brief-host` on macOS, `~/.cache/crc-brief-host` on Linux) with the GitHub token the extension sends. The token goes to `git` in the environment of that one command. It is not written to disk. Your own clones are not touched.
 - It makes a temporary checkout, removes symbolic links that point outside it, and deletes the checkout when the run ends.
+- While git handles the pull request's files, it ignores your git configuration. A `.gitattributes` file in a pull request can therefore not start a filter, a text converter or a hook that you have set up. Only the fetch reads your configuration, for a proxy, and it runs no hooks.
+- Every git command and Claude Code itself have a time limit, and they stop when Chrome closes the connection.
 - It runs Claude Code with the limits below. Your Claude settings, plugins, hooks and MCP servers are not loaded, and neither are the repository's.
 - Chrome must stay open until the run ends. A small pull request takes about a minute. Usage counts against your own Claude plan.
 

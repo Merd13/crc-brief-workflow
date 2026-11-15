@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "../lib/actions.mjs";
 
@@ -89,10 +89,12 @@ function main(args) {
   }
   // Checked before anything is looked up, so a wrong id is the first thing reported.
   if (!isExtensionId(extensionId)) throw new Error(BAD_EXTENSION_ID);
-  const claudePath = option(args, "--claude") ?? findClaude();
-  if (!claudePath) {
+  const given = option(args, "--claude") ?? findClaude();
+  if (!given) {
     throw new Error("Could not find Claude Code. Install it (https://code.claude.com), or give its path with --claude <path>.");
   }
+  // Stored as a full path. The helper starts in a pull request's checkout, where a relative path would resolve.
+  const claudePath = resolve(given);
   const plan = installPlan({
     extensionId,
     platform: process.platform,

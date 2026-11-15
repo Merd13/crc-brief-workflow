@@ -28,8 +28,9 @@ export const git = (cwd, ...args) =>
 /**
  * A bare "remote" with a base commit on main and a pull request head at refs/pull/7/head.
  * The head changes a.txt, adds the file the example brief refers to, and adds a link that leaves the repository.
+ * `attributes`: content for a .gitattributes file in the head commit.
  */
-export function remoteWithPull() {
+export function remoteWithPull({ attributes } = {}) {
   const root = mkdtempSync(join(tmpdir(), "crc-checkout-"));
   const work = join(root, "work");
   mkdirSync(work);
@@ -43,6 +44,8 @@ export function remoteWithPull() {
   mkdirSync(join(work, "src/billing"), { recursive: true });
   writeFileSync(join(work, "src/billing/retry-payment.ts"), "line\n".repeat(100));
   symlinkSync("/etc", join(work, "outside-link"));
+  // Optional .gitattributes, to test that it cannot select programs from the user's git configuration.
+  if (attributes) writeFileSync(join(work, ".gitattributes"), attributes);
   git(work, "add", ".");
   git(work, "commit", "-q", "-m", "Change");
   const headSha = git(work, "rev-parse", "HEAD");
